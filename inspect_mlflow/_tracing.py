@@ -27,6 +27,9 @@ TRACE_MAX_TEXT_CHARS = 4000
 class _TracingHost(Protocol):
     """Protocol describing hook attributes/methods used by TracingMixin."""
 
+    # eval_id -> run_id; заполняется хуком до первого трейса.
+    _active_runs: dict[str, str]
+
     def _scores_to_dict(self, scores: Any) -> dict[str, Any]: ...
 
     def _get_sample_output_text(self, sample: Any) -> str | None: ...
@@ -88,6 +91,21 @@ class TracingMixin:
     - self._get_sample_output_text(sample) -> str | None
     """
 
+    def _source_run_tag(self, eval_id: str) -> dict[str, str]:
+        """Тег ``mlflow.sourceRun`` — привязка трейса к прогону.
+
+        MLflow проставляет этот тег сам, только если находит активный
+        прогон в стеке ``mlflow.start_run``. Мост создаёт прогон через
+        ``client.create_run``, стек остаётся пустым, и без тега страница
+        прогона в UI показывает пустой список трейсов — хотя трейсы есть
+        и лежат в эксперименте.
+
+        ``_active_runs`` ведёт сам хост (eval_id -> run_id) и заполняется
+        до первого трейса. Нет записи (трейс вне прогона) — тег не нужен.
+        """
+        run_id = getattr(self, "_active_runs", {}).get(eval_id)
+        return {"mlflow.sourceRun": run_id} if run_id else {}
+
     @staticmethod
     def _truncate_trace_text(value: Any, max_chars: int = TRACE_MAX_TEXT_CHARS) -> Any:
         """Limit very large text payloads so trace retrieval/UI remains usable."""
@@ -142,6 +160,7 @@ class TracingMixin:
                             "inspect.task": str(task_name),
                             "inspect.eval_id": str(eval_id),
                             "inspect.sample_id": str(sample_id) if sample_id else "",
+                            **self._source_run_tag(eval_id),
                         }
                     )
                 except Exception:
